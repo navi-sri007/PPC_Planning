@@ -15,14 +15,17 @@ def get_dashboard(db: Session = Depends(get_db)):
     dashboard_jobs = []
     
     for job in jobs:
-        # Get job template name
         template = db.query(models.JobTemplate).filter(models.JobTemplate.id == job.template_id).first()
-        job_name = template.name if template else "Unknown"
         
-        # Get assigned machines for this job
+        # Build display name with client suffix
+        base_name = template.name if template else "Unknown"
+        if job.client_name and job.client_name.strip():
+            job_name = f"{base_name} - {job.client_name}"
+        else:
+            job_name = base_name
+        
+        # Get assigned machines
         schedules = db.query(models.JobSchedule).filter(models.JobSchedule.job_id == job.id).all()
-        
-        # Get unique machine names assigned to this job
         machine_names = []
         for schedule in schedules:
             machine = db.query(models.Machine).filter(models.Machine.id == schedule.machine_id).first()
@@ -34,6 +37,7 @@ def get_dashboard(db: Session = Depends(get_db)):
         dashboard_jobs.append({
             "job_id": job.id,
             "job_name": job_name,
+            "client_name": job.client_name,
             "assigned_machine": assigned_machine,
             "progress": job.completion_percentage,
             "delivery_date": job.due_date,
@@ -41,7 +45,7 @@ def get_dashboard(db: Session = Depends(get_db)):
         })
     
     return {"jobs": dashboard_jobs}
-
+  
 @router.get("/pending-jobs")
 def get_pending_jobs(db: Session = Depends(get_db)):
     """Get all pending jobs (not 100% complete)"""

@@ -1,14 +1,21 @@
 import React, { useState, useEffect } from "react";
 import { useApi } from "../../hooks/useApi";
 import { useApp } from "../../context/AppContext";
-import { Calendar, PlusCircle, CheckCircle2, ChevronRight } from "lucide-react";
+import {
+  Calendar,
+  PlusCircle,
+  CheckCircle2,
+  ChevronRight,
+  User,
+} from "lucide-react";
 import { formatDate } from "../../utils/dateFormatter";
 
 export default function JobForm() {
-  const { createJob, fetchJobTemplates } = useApi();
-  const { jobTemplates, loadingStates } = useApp();
+  const { createJob, fetchJobTemplates, fetchJobs } = useApi(); // Add fetchJobs here
+  const { jobTemplates, loadingStates } = useApp(); // Remove jobClientMap related imports
 
   const [templateId, setTemplateId] = useState("");
+  const [clientName, setClientName] = useState("");
   const [quantity, setQuantity] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [errors, setErrors] = useState({});
@@ -73,6 +80,7 @@ export default function JobForm() {
     try {
       const result = await createJob({
         template_id: parseInt(templateId),
+        client_name: clientName.trim(),
         quantity: parseInt(quantity),
         due_date: dueDate,
       });
@@ -81,11 +89,15 @@ export default function JobForm() {
       setSuccessData(result);
 
       // Clear Form inputs
+      setClientName("");
       setQuantity("");
       setDueDate("");
       setErrors({});
+
+      // Refresh the jobs list to show the new job with client name
+      await fetchJobs(); // This will update the jobs list in context
     } catch (err) {
-      // Handled by Axios interceptor toast
+      console.error("Error creating job:", err);
     }
   };
 
@@ -109,7 +121,7 @@ export default function JobForm() {
               value={templateId}
               onChange={(e) => {
                 setTemplateId(e.target.value);
-                setSuccessData(null); // Clear success message on change
+                setSuccessData(null);
               }}
               disabled={isFormLoading}
               className={`w-full px-3 py-2 border rounded-lg bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary-550 focus:border-transparent ${
@@ -151,6 +163,31 @@ export default function JobForm() {
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Client Name Field */}
+          <div>
+            <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+              <div className="flex items-center gap-1.5">
+                <User className="w-3.5 h-3.5" />
+                Client Name
+              </div>
+            </label>
+            <input
+              type="text"
+              value={clientName}
+              onChange={(e) => setClientName(e.target.value)}
+              disabled={isFormLoading}
+              placeholder="Optional: Add client name (e.g., Toyota, Honda)"
+              className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary-550 focus:border-transparent"
+            />
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Job will be displayed as:{" "}
+              <span className="font-semibold text-foreground">
+                {selectedTemplate?.name || "Job Type"}
+                {clientName && ` - ${clientName}`}
+              </span>
+            </p>
           </div>
 
           {/* Job Quantity */}
@@ -226,6 +263,11 @@ export default function JobForm() {
             <div className="flex-1">
               <h4 className="font-bold text-sm text-emerald-900 dark:text-emerald-250">
                 Job Created Successfully!
+                {clientName && (
+                  <span className="ml-2 text-xs font-normal">
+                    for {clientName}
+                  </span>
+                )}
               </h4>
               <p className="text-xs mt-0.5 text-emerald-700 dark:text-emerald-400">
                 Job #{successData.id} has been entered into the active

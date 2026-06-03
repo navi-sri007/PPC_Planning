@@ -12,8 +12,8 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 def get_jobs(db: Session = Depends(get_db)):
     """Get all jobs"""
     jobs = db.query(models.Job).all()
-    # Convert to response format
     result = []
+    
     for job in jobs:
         template = db.query(models.JobTemplate).filter(models.JobTemplate.id == job.template_id).first()
         
@@ -32,6 +32,7 @@ def get_jobs(db: Session = Depends(get_db)):
         result.append({
             "id": job.id,
             "template_id": job.template_id,
+            "client_name": job.client_name,  # Include this
             "quantity": job.quantity,
             "due_date": job.due_date,
             "completion_percentage": job.completion_percentage,
@@ -62,7 +63,25 @@ def get_job_templates(db: Session = Depends(get_db)):
         })
     
     return result
-
+# Add to routers/jobs.py temporarily for testing
+@router.get("/debug/check-names")
+def check_client_names(db: Session = Depends(get_db)):
+    """Debug endpoint to check if client names are being saved"""
+    jobs = db.query(models.Job).all()
+    result = []
+    for job in jobs:
+        template = db.query(models.JobTemplate).filter(models.JobTemplate.id == job.template_id).first()
+        result.append({
+            "job_id": job.id,
+            "template": template.name if template else "Unknown",
+            "client_name": job.client_name,
+            "has_client": bool(job.client_name and job.client_name.strip())
+        })
+    return {
+        "total_jobs": len(result),
+        "jobs_with_client": sum(1 for j in result if j["has_client"]),
+        "jobs": result
+    }
 @router.post("/", response_model=schemas.JobResponse)
 def create_job(job: schemas.JobCreate, db: Session = Depends(get_db)):
     """Create a new job and automatically schedule it"""
@@ -75,6 +94,7 @@ def create_job(job: schemas.JobCreate, db: Session = Depends(get_db)):
     db_job = models.Job(
         template_id=job.template_id,
         client_name=job.client_name or "",  # NEW
+
         quantity=job.quantity,
         due_date=job.due_date,
         completion_percentage=0.0,
@@ -106,6 +126,7 @@ def create_job(job: schemas.JobCreate, db: Session = Depends(get_db)):
     job_display_name = f"{template.name}"
     if job.client_name:
         job_display_name += f" - {job.client_name}"
+        print(f"Created job: {job_display_name} ")
     
     return {
         "id": db_job.id,
@@ -144,6 +165,7 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
     return {
         "id": job.id,
         "template_id": job.template_id,
+        "client_name": job.client_name,
         "quantity": job.quantity,
         "due_date": job.due_date,
         "completion_percentage": job.completion_percentage,

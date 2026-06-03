@@ -67,6 +67,7 @@ class JobResponse(BaseModel):
     id: int
     job_display_name: Optional[str] = None
     template_id: int
+    client_name: Optional[str] = None
     quantity: int
     due_date: date
     completion_percentage: float

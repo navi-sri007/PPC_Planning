@@ -120,44 +120,40 @@ def get_pending_jobs_response(db: Session):
         "data": pending,
         "message": f"Found {len(pending)} pending job(s)"
     }
+
 def get_schedule_timetable(db: Session):
-    """Get schedule timetable from today until last date with any machine booking"""
+    """Get schedule timetable with machines on Y-axis and dates on X-axis"""
     from datetime import datetime, timedelta
     
-    # Get all machines
     machines = db.query(models.Machine).all()
-    
-    # Get today's date
     today = date.today()
     
-    # Find the last date where any machine has a booking
+    # Get ALL schedules to find the furthest date
     all_schedules = db.query(models.JobSchedule).all()
     
     if all_schedules:
-        # Get the maximum assigned date from all schedules
-        last_booking_date = max(s.assigned_date for s in all_schedules)
-        end_date = last_booking_date
+        max_date = max(s.assigned_date for s in all_schedules)
+        end_date = max_date
     else:
-        # If no schedules, just show today
         end_date = today
     
-    # Generate all dates from today to end_date
+    if end_date == today:
+        end_date = today + timedelta(days=7)
+    
     dates = []
     current = today
     while current <= end_date:
         dates.append(current)
         current += timedelta(days=1)
     
-    # Create schedule data structure
+    # Initialize schedule data structure
     schedule_data = {}
     for machine in machines:
         schedule_data[machine.name] = {}
         for d in dates:
             schedule_data[machine.name][d.isoformat()] = []
     
-    # Get all schedules (not just future ones)
-    all_schedules = db.query(models.JobSchedule).all()
-    
+    # Populate schedule data with client names
     for schedule in all_schedules:
         machine = db.query(models.Machine).filter(models.Machine.id == schedule.machine_id).first()
         job = db.query(models.Job).filter(models.Job.id == schedule.job_id).first()
@@ -166,27 +162,35 @@ def get_schedule_timetable(db: Session):
         if machine and job and template:
             date_str = schedule.assigned_date.isoformat()
             if date_str in schedule_data[machine.name]:
-                job_info = f"{template.name} (Step {schedule.process_step})"
-                schedule_data[machine.name][date_str].append(job_info)
+                # CRITICAL: Build the display name with client
+                base_name = template.name
+                if job.client_name and job.client_name.strip():
+                    display_name = f"{base_name} - {job.client_name}"
+                else:
+                    display_name = base_name
+                
+                job_info = f"{display_name} (Step {schedule.process_step})"
+                
+                # Avoid duplicates
+                if job_info not in schedule_data[machine.name][date_str]:
+                    schedule_data[machine.name][date_str].append(job_info)
     
-    # Also show machines with no bookings (they will have empty cells)
     return {
         "intent": "schedule_timetable",
         "machines": [m.name for m in machines],
         "dates": [d.isoformat() for d in dates],
         "schedule_data": schedule_data,
-        "message": f"Showing schedule from {today.strftime('%b %d, %Y')} to {end_date.strftime('%b %d, %Y')} ({len(dates)} days)",
-        "start_date": today.isoformat(),
-        "end_date": end_date.isoformat()
+        "message": f"Showing schedule from {today.strftime('%b %d, %Y')} to {end_date.strftime('%b %d, %Y')} ({len(dates)} days)"
     }
+
 def get_jobs_near_due(db: Session, days_threshold: int = 5):
     """Get jobs due within threshold days"""
     today = date.today()
     threshold_date = today + timedelta(days=days_threshold)
     
+    # Include jobs that are overdue as well
     jobs = db.query(models.Job).filter(
         models.Job.due_date <= threshold_date,
-        models.Job.due_date >= today,
         models.Job.completion_percentage < 100
     ).all()
     
@@ -194,27 +198,47 @@ def get_jobs_near_due(db: Session, days_threshold: int = 5):
     for job in jobs:
         template = db.query(models.JobTemplate).filter(models.JobTemplate.id == job.template_id).first()
         days_remaining = (job.due_date - today).days
+        
+        # Determine urgency
+        if days_remaining < 0:
+            urgency = "🔴 OVERDUE"
+            urgency_level = 0
+        elif days_remaining == 0:
+            urgency = "🔴 DUE TODAY"
+            urgency_level = 1
+        elif days_remaining <= 2:
+            urgency = "🔴 URGENT"
+            urgency_level = 2
+        elif days_remaining <= 5:
+            urgency = "🟡 Due soon"
+            urgency_level = 3
+        else:
+            urgency = "🟢 On track"
+            urgency_level = 4
+            
         near_due.append({
             "job_id": job.id,
             "job_name": template.name if template else "Unknown",
+            "client_name": job.client_name or "N/A",
             "due_date": job.due_date.isoformat(),
             "days_remaining": days_remaining,
-            "completion_percentage": job.completion_percentage
+            "completion_percentage": job.completion_percentage,
+            "urgency": urgency,
+            "urgency_level": urgency_level
         })
     
-    near_due.sort(key=lambda x: x["days_remaining"])
+    # Sort by urgency (most urgent first)
+    near_due.sort(key=lambda x: (x["urgency_level"], x["days_remaining"]))
     
     return {
         "intent": "jobs_near_due",
         "data": near_due,
-        "message": f"Found {len(near_due)} job(s) due within {days_threshold} days",
+        "message": f"Found {len(near_due)} job(s) due within {days_threshold} days" if near_due else "No jobs are near their due date!",
         "threshold_days": days_threshold
     }
 
-
-
 def detect_intent(question: str):
-    """Enhanced intent detection"""
+    """Enhanced intent detection with more patterns"""
     q = question.lower()
     
     # Check for specific machine question
@@ -228,16 +252,23 @@ def detect_intent(question: str):
     if any(word in q for word in ["available machine", "available mission", "idle machine", "free machine", "which machines", "list machines"]):
         return ("available_machines", None)
     
-    # Check for pending jobs variations
-    elif any(word in q for word in ["pending job", "incomplete job", "unfinished job", "jobs not done", "remaining jobs"]):
+    # Check for pending jobs variations (EXPANDED)
+    if any(word in q for word in ["pending job", "incomplete job", "unfinished job", "jobs not done", "remaining jobs", "jobs pending", "pending work", "in progress"]):
         return ("pending_jobs", None)
     
-    # Check for near due variations
-    elif any(word in q for word in ["near due", "nearest to due", "approaching due", "due soon", "urgent", "deadline"]):
+    # Check for near due variations (IMPROVED - covers more patterns)
+    near_due_patterns = [
+        "near due", "near their due", "nearest to due", "approaching due", 
+        "due soon", "urgent", "deadline", "jobs due", "due date", 
+        "close to deadline", "upcoming deadline", "about to due",
+        "near deadline", "approaching deadline"
+    ]
+    
+    if any(pattern in q for pattern in near_due_patterns):
         return ("jobs_near_due", None)
     
     # Check for schedule variations
-    elif any(word in q for word in ["schedule", "timetable", "gantt", "calendar", "timeline"]):
+    if any(word in q for word in ["schedule", "timetable", "gantt", "calendar", "timeline"]):
         return ("schedule_timetable", None)
     
     else:
@@ -248,6 +279,9 @@ def ask_ai(question: schemas.AIQuestion, db: Session = Depends(get_db)):
     """Process AI assistant questions with enhanced natural language understanding"""
     
     intent, param = detect_intent(question.question)
+    
+    # Debug print to see what intent was detected
+    print(f"Question: '{question.question}' -> Detected intent: {intent}, param: {param}")
     
     # Handle specific machine availability
     if intent == "specific_machine":
@@ -281,8 +315,11 @@ def ask_ai(question: schemas.AIQuestion, db: Session = Depends(get_db)):
     elif intent == "pending_jobs":
         result = get_pending_jobs_response(db)
         answer = result["message"] + "\n\n"
-        for job in result["data"]:
-            answer += f"  📋 {job['job_name']}: {job['quantity']} units - {job['completion_percentage']}% complete - Due: {job['due_date']}\n"
+        if result["data"]:
+            for job in result["data"]:
+                answer += f"  📋 {job['job_name']}: {job['quantity']} units - {job['completion_percentage']}% complete - Due: {job['due_date']}\n"
+        else:
+            answer = "No pending jobs found! All jobs are complete. 🎉"
         
         return {
             "answer": answer,
@@ -290,16 +327,28 @@ def ask_ai(question: schemas.AIQuestion, db: Session = Depends(get_db)):
             "visualization": None
         }
     
-    # Handle jobs near due
+    # Handle jobs near due (UPDATED with better response)
     elif intent == "jobs_near_due":
         result = get_jobs_near_due(db)
+        
         if result["data"]:
-            answer = result["message"] + "\n\n"
+            answer = f"📅 **{result['message']}**\n\n"
             for job in result["data"]:
-                urgency = "🔴 URGENT" if job["days_remaining"] <= 2 else "🟡 Due soon"
-                answer += f"  {urgency} {job['job_name']}: Due in {job['days_remaining']} days ({job['due_date']}) - {job['completion_percentage']}% complete\n"
+                if job["days_remaining"] < 0:
+                    days_text = f"{abs(job['days_remaining'])} days overdue"
+                elif job["days_remaining"] == 0:
+                    days_text = "Due TODAY"
+                elif job["days_remaining"] == 1:
+                    days_text = "Due tomorrow"
+                else:
+                    days_text = f"Due in {job['days_remaining']} days"
+                
+                answer += f"  {job['urgency']} **{job['job_name']}**\n"
+                answer += f"     Client: {job['client_name']}\n"
+                answer += f"     {days_text} ({job['due_date']})\n"
+                answer += f"     Progress: {job['completion_percentage']}% complete\n\n"
         else:
-            answer = "No jobs are near their due date within the next 5 days. Good planning! ✅"
+            answer = "✅ **No jobs are near their due date!**\n\nAll active jobs have at least 5 days remaining until their deadline. Great planning!"
         
         return {
             "answer": answer,
@@ -335,6 +384,7 @@ def ask_ai(question: schemas.AIQuestion, db: Session = Depends(get_db)):
 • "What are the pending jobs?"
 • "Which jobs are near their due date?"
 • "Show me urgent jobs"
+• "What jobs are due soon?"
 
 📌 **Schedule queries:**
 • "Show me the schedule timetable"
